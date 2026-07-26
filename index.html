@@ -577,6 +577,27 @@ function penObjective(P) {
 }
 function exactOptimumCost() { return dispatchAt(solveExact(Pd)).cost; }
 
+// Project a dispatch onto the feasible manifold ΣP = Pd (respecting limits), by
+// sharing the surplus/deficit among units that still have headroom. Lets the swarm
+// search feasible dispatches directly rather than fighting the balance penalty —
+// key to reaching the global optimum on the rippled valve-point landscape.
+function repair(P) {
+  for (let t = 0; t < 40; t++) {
+    let s = 0; for (const v of P) s += v;
+    const d = Pd - s;
+    if (Math.abs(d) < 1e-4) break;
+    const idx = [];
+    for (let i = 0; i < P.length; i++) {
+      if (d > 0 && P[i] < gens[i].pmax - 1e-9) idx.push(i);
+      else if (d < 0 && P[i] > gens[i].pmin + 1e-9) idx.push(i);
+    }
+    if (idx.length === 0) break;
+    const share = d / idx.length;
+    for (const i of idx) P[i] = Math.max(gens[i].pmin, Math.min(gens[i].pmax, P[i] + share));
+  }
+  return P;
+}
+
 let pso = null;
 function psoInit() {
   const np = +npRange.value, parts = [];
@@ -589,6 +610,7 @@ function psoInit() {
     const P = (k === 0 && costModel === "valve")
       ? baseP.slice()
       : gens.map(g => g.pmin + Math.random()*(g.pmax - g.pmin));
+    if (costModel === "valve") repair(P);   // start on the feasible manifold
     const V = gens.map(g => (Math.random()-0.5)*(g.pmax - g.pmin)*0.1);
     const oc = penObjective(P);
     parts.push({ P, V, pP:P.slice(), pCost:oc });
@@ -598,14 +620,21 @@ function psoInit() {
 }
 function psoStep() {
   const w = +wRange.value, c1 = +c1Range.value, c2 = +c2Range.value, N = gens.length;
+  const valve = costModel === "valve";
   for (const pt of pso.parts) {
     for (let i = 0; i < N; i++) {
       const r1 = Math.random(), r2 = Math.random();
       // v = w*v + c1*r1*(pbest - x) + c2*r2*(gbest - x)
       pt.V[i] = w*pt.V[i] + c1*r1*(pt.pP[i] - pt.P[i]) + c2*r2*(pso.gP[i] - pt.P[i]);
-      const vmax = 0.2*(gens[i].pmax - gens[i].pmin);
+      const vmax = 0.25*(gens[i].pmax - gens[i].pmin);
       pt.V[i] = Math.max(-vmax, Math.min(vmax, pt.V[i]));
       pt.P[i] = Math.max(gens[i].pmin, Math.min(gens[i].pmax, pt.P[i] + pt.V[i]));
+    }
+    if (valve) {
+      // turbulence: occasionally re-randomize one unit to escape ripple local optima
+      if (Math.random() < 0.12) { const i = (Math.random()*N)|0;
+        pt.P[i] = gens[i].pmin + Math.random()*(gens[i].pmax - gens[i].pmin); }
+      repair(pt.P);           // keep the particle on the feasible manifold ΣP = Pd
     }
     const oc = penObjective(pt.P);
     if (oc < pt.pCost) { pt.pCost = oc; pt.pP = pt.P.slice(); }

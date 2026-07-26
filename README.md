@@ -56,9 +56,9 @@ A **Cost model** switch chooses what you're solving:
 
 - **Valve-point (non-convex)** — loads the classic **Walters & Sheble (1993) 3-unit benchmark**, adding a rectified-sine ripple $|e_i\sin(f_i(P_i^{\min}-P_i))|$ to each cost curve. Because the units have nearly-equal incremental costs they all stay *interior* (free to move), so the ripples create many local optima. Now **λ-iteration is suboptimal** — it only sees the smooth trend — and **PSO finds a genuinely cheaper dispatch**, dipping below the λ-iteration baseline on the convergence plot. A ripple-scale slider exaggerates the effect.
 
-  For this benchmark ($P_d = 850$ MW): the λ-iteration dispatch costs ≈ **8482 $/h**, the true optimum is ≈ **8234 $/h**, and PSO lands in between — beating the classical method by exploiting the ripples, exactly the regime where metaheuristics earn their keep.
+  For this benchmark ($P_d = 850$ MW): the λ-iteration dispatch costs ≈ **8482 $/h**, while PSO reaches the true optimum of ≈ **8234 $/h** — beating the classical method by ≈ 3% by exploiting the ripples, exactly the regime where metaheuristics earn their keep.
 
-Both use the same PSO core: each particle is a full dispatch vector, updated by the standard velocity rule, with the power balance handled by a penalty (valve mode warm-starts one particle at the λ-iteration solution so the swarm can only improve on it).
+Both modes use the same PSO core: each particle is a full dispatch vector, updated by the standard velocity rule. Smooth mode handles the power balance with a penalty and random initialization (so its convergence is visible from a high starting cost). Valve mode adds three things that let the swarm reach the global optimum on the rugged rippled landscape: it **warm-starts** one particle at the λ-iteration solution, keeps every particle **feasible by repair** (projecting onto ΣP = Pd so the search runs on the feasible manifold), and applies light **turbulence** (occasionally re-randomizing a unit) to escape ripple local optima.
 
 ## Running / hosting it yourself
 

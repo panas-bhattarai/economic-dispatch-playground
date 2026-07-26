@@ -64,8 +64,11 @@
     <div class="cap">Incremental cost <b>dC/dP = 2aP + b</b> vs output — drag the white λ line; each unit loads to where its line meets λ (clamped to its limits)</div>
     <div class="card"><canvas id="ic" width="620" height="380"></canvas></div>
 
-    <div class="cap">Dispatch — each unit's output within its [Pmin, Pmax] band, and total generation vs demand</div>
+    <div class="cap">Dispatch — colored bars = exact optimum; <b>white marks = PSO's best guess</b> (when running). Total generation vs demand below.</div>
     <div class="card"><canvas id="bars" width="620" height="250"></canvas></div>
+
+    <div class="cap">PSO convergence — swarm's best total cost vs iteration (log scale); the green dashed line is the exact λ‑iteration optimum</div>
+    <div class="card"><canvas id="conv" width="620" height="180"></canvas></div>
 
     <div class="gentable">
       <h2>Generators — edit cost coefficients and limits</h2>
@@ -115,11 +118,47 @@
     </div>
 
     <div class="group">
+      <h2>PSO solver — race the exact answer</h2>
+      <div class="btns">
+        <button class="primary" id="psoRun">▶ Run PSO</button>
+        <button id="psoReset">Reset swarm</button>
+      </div>
+      <label class="row">
+        <div class="lab"><span>Swarm size</span><span class="val" id="npVal">40</span></div>
+        <input type="range" id="npRange" min="5" max="300" step="5" value="40" />
+      </label>
+      <label class="row">
+        <div class="lab"><span>Inertia w</span><span class="val" id="wVal">0.70</span></div>
+        <input type="range" id="wRange" min="0" max="1.2" step="0.01" value="0.70" />
+      </label>
+      <label class="row">
+        <div class="lab"><span>c1 — cognitive</span><span class="val" id="c1Val">1.50</span></div>
+        <input type="range" id="c1Range" min="0" max="3" step="0.05" value="1.50" />
+      </label>
+      <label class="row">
+        <div class="lab"><span>c2 — social</span><span class="val" id="c2Val">1.50</span></div>
+        <input type="range" id="c2Range" min="0" max="3" step="0.05" value="1.50" />
+      </label>
+      <label class="row">
+        <div class="lab"><span>Speed (iterations / second)</span><span class="val" id="spVal">8</span></div>
+        <input type="range" id="spRange" min="1" max="60" step="1" value="8" />
+      </label>
+      <div class="readout" style="margin-top:6px;">
+        <div><span class="k">Iteration</span><span class="v" id="psoIter">—</span></div>
+        <div><span class="k">PSO best cost (fuel)</span><span class="v" id="psoCost">—</span></div>
+        <div><span class="k">Exact optimum</span><span class="v" id="psoOpt">—</span></div>
+        <div><span class="k">Optimality gap</span><span class="v" id="psoGap">—</span></div>
+        <div><span class="k">PSO power balance</span><span class="v" id="psoBal">—</span></div>
+      </div>
+      <div class="hint">Each particle is a full dispatch vector (one output per unit). Watch the white marks on the bars slide onto the colored optimum, and the blue curve fall onto the green optimum line.</div>
+    </div>
+
+    <div class="group">
       <h2>Reset</h2>
       <div class="btns">
         <button id="resetBtn">Reset to default 5‑unit case (Pd = 850)</button>
       </div>
-      <div class="hint">Default data matches the MATLAB repo <b>Economic-Dispatch-Using-Particle-Swarm-Optimization</b>. Next versions add a PSO solver racing this exact answer, and valve‑point loading (non‑convex, where PSO earns its keep).</div>
+      <div class="hint">Default data matches the MATLAB repo <b>Economic-Dispatch-Using-Particle-Swarm-Optimization</b>. Coming next: valve‑point loading (a non‑convex cost ripple, where λ‑iteration breaks and PSO earns its keep).</div>
     </div>
   </div>
 </div>
@@ -289,6 +328,19 @@ function drawBars() {
   bctx.fillStyle = "#e6edf3"; bctx.font = "12px monospace"; bctx.textBaseline = "middle";
   bctx.fillText("Σ", 12, ty+6+rowH/2);
   bctx.fillText(d.total.toFixed(1)+" MW", w-padR+8, ty+6+rowH/2);
+
+  // PSO gbest overlay — white marks racing onto the colored optimum bars
+  if (pso) {
+    bctx.strokeStyle = "#ffffff"; bctx.lineWidth = 2;
+    gens.forEach((g,i) => {
+      const y = top + i*(rowH+gap), xx = X(pso.gP[i]);
+      bctx.beginPath(); bctx.moveTo(xx, y-2); bctx.lineTo(xx, y+rowH+2); bctx.stroke();
+    });
+    const gp = pso.gP.reduce((s,v) => s+v, 0), xg = XT(gp);
+    bctx.beginPath(); bctx.moveTo(xg, ty+4); bctx.lineTo(xg, ty+6+rowH+2); bctx.stroke();
+    bctx.fillStyle = "#ffffff"; bctx.font = "10px monospace"; bctx.textBaseline = "bottom";
+    bctx.fillText("│ = PSO", w-padR-52, top-1);
+  }
 }
 
 // ------------------------------------------------------------------
@@ -359,7 +411,9 @@ function syncLamSlider() {
 function refresh() {
   if (mode === "auto") lambda = solveExact(Pd);
   syncLamSlider();
+  if (pso) psoInit();          // the problem changed — restart the swarm against it
   drawIC(); drawBars(); renderTable(); updateReadout();
+  if (pso) { drawConv(); updatePsoReadout(); }
 }
 
 // ------------------------------------------------------------------
@@ -402,8 +456,143 @@ window.addEventListener("mousemove", e => { if (!dragging) return; lambda = lamF
 window.addEventListener("mouseup", () => { dragging = false; });
 ic.style.cursor = "ns-resize";
 
+// ------------------------------------------------------------------
+//  PSO solver — a swarm of candidate dispatch vectors racing the exact
+//  λ-iteration optimum. Mirrors the MATLAB companion repo: constraint
+//  handled by a quadratic penalty on the power balance.
+// ------------------------------------------------------------------
+const conv = document.getElementById("conv"), cctx = conv.getContext("2d");
+const npRange = document.getElementById("npRange"), wRange = document.getElementById("wRange"),
+      c1Range = document.getElementById("c1Range"), c2Range = document.getElementById("c2Range"),
+      spRange = document.getElementById("spRange");
+const MU = 120;   // fixed penalty weight on the power-balance equality (kept constant so the
+                  //   objective is consistent across iterations — the swarm's gbest never worsens)
+
+function fuelCost(P) { return gens.reduce((s,g,i) => s + g.a*P[i]*P[i] + g.b*P[i] + g.c, 0); }
+function penObjective(P) {
+  let total = 0; for (const v of P) total += v;
+  return fuelCost(P) + MU*(total - Pd)*(total - Pd);
+}
+function exactOptimumCost() { return dispatchAt(solveExact(Pd)).cost; }
+
+let pso = null;
+function psoInit() {
+  const np = +npRange.value, parts = [];
+  let gP = null, gCost = Infinity;
+  for (let k = 0; k < np; k++) {
+    const P = gens.map(g => g.pmin + Math.random()*(g.pmax - g.pmin));
+    const V = gens.map(g => (Math.random()-0.5)*(g.pmax - g.pmin)*0.1);
+    const oc = penObjective(P);
+    parts.push({ P, V, pP:P.slice(), pCost:oc });
+    if (oc < gCost) { gCost = oc; gP = P.slice(); }
+  }
+  pso = { parts, gP, gCost, iter:0, optimum:exactOptimumCost(), history:[gCost] };
+}
+function psoStep() {
+  const w = +wRange.value, c1 = +c1Range.value, c2 = +c2Range.value, N = gens.length;
+  for (const pt of pso.parts) {
+    for (let i = 0; i < N; i++) {
+      const r1 = Math.random(), r2 = Math.random();
+      // v = w*v + c1*r1*(pbest - x) + c2*r2*(gbest - x)
+      pt.V[i] = w*pt.V[i] + c1*r1*(pt.pP[i] - pt.P[i]) + c2*r2*(pso.gP[i] - pt.P[i]);
+      const vmax = 0.2*(gens[i].pmax - gens[i].pmin);
+      pt.V[i] = Math.max(-vmax, Math.min(vmax, pt.V[i]));
+      pt.P[i] = Math.max(gens[i].pmin, Math.min(gens[i].pmax, pt.P[i] + pt.V[i]));
+    }
+    const oc = penObjective(pt.P);
+    if (oc < pt.pCost) { pt.pCost = oc; pt.pP = pt.P.slice(); }
+    if (oc < pso.gCost) { pso.gCost = oc; pso.gP = pt.P.slice(); }
+  }
+  pso.iter++;
+  pso.history.push(pso.gCost);
+}
+
+function drawConv() {
+  const w = conv.width, h = conv.height;
+  cctx.clearRect(0,0,w,h); cctx.fillStyle = "#0b0f14"; cctx.fillRect(0,0,w,h);
+  const padL = 60, padR = 14, padT = 12, padB = 22, plotW = w-padL-padR, plotH = h-padT-padB;
+  if (!pso) { cctx.fillStyle = "#6b7686"; cctx.font = "12px monospace"; cctx.textBaseline = "middle";
+    cctx.fillText("Run PSO to see the swarm converge to the optimum…", padL, h/2); return; }
+  const opt = pso.optimum, hist = pso.history, n = hist.length;
+  const lg = v => Math.log10(Math.max(v, 1));
+  let yLo = lg(opt) - 0.15, yHi = lg(Math.max(...hist)) + 0.1;
+  if (yHi <= yLo) yHi = yLo + 1;
+  const X = i => padL + (n <= 1 ? 0 : (i/(n-1))*plotW);
+  const Y = l => padT + (1 - (l-yLo)/(yHi-yLo))*plotH;
+  // gridlines at powers of ten ($)
+  cctx.font = "10px monospace"; cctx.textBaseline = "middle";
+  for (let p = Math.ceil(yLo); p <= Math.floor(yHi); p++) {
+    const yy = Y(p);
+    cctx.strokeStyle = "#1c2330"; cctx.beginPath(); cctx.moveTo(padL, yy); cctx.lineTo(w-padR, yy); cctx.stroke();
+    cctx.fillStyle = "#6b7686"; cctx.fillText("$" + Math.pow(10,p).toLocaleString(), 6, yy);
+  }
+  // exact optimum reference line
+  const oy = Y(lg(opt));
+  cctx.strokeStyle = "#3fb950"; cctx.lineWidth = 1.5; cctx.setLineDash([5,4]);
+  cctx.beginPath(); cctx.moveTo(padL, oy); cctx.lineTo(w-padR, oy); cctx.stroke(); cctx.setLineDash([]);
+  cctx.fillStyle = "#3fb950"; cctx.textBaseline = "bottom"; cctx.fillText("optimum $" + opt.toFixed(0), padL+4, oy-3);
+  // convergence curve (stride so long runs stay fast)
+  const stride = Math.max(1, Math.floor(n/plotW));
+  cctx.strokeStyle = "#58a6ff"; cctx.lineWidth = 2; cctx.beginPath();
+  let first = true;
+  for (let i = 0; i < n; i += stride) { const xx = X(i), yy = Y(lg(hist[i]));
+    if (first) { cctx.moveTo(xx, yy); first = false; } else cctx.lineTo(xx, yy); }
+  cctx.lineTo(X(n-1), Y(lg(hist[n-1]))); cctx.stroke();
+  cctx.fillStyle = "#6b7686"; cctx.textBaseline = "alphabetic"; cctx.fillText("iteration " + (n-1), padL, h-7);
+}
+
+function updatePsoReadout() {
+  const el = id => document.getElementById(id);
+  if (!pso) { ["psoIter","psoCost","psoOpt","psoGap","psoBal"].forEach(i => el(i).textContent = "—"); return; }
+  const fuel = fuelCost(pso.gP), tot = pso.gP.reduce((s,v) => s+v, 0), bal = tot - Pd, gap = fuel - pso.optimum;
+  el("psoIter").textContent = pso.iter;
+  el("psoCost").textContent = fuel.toFixed(1) + " $/h";
+  el("psoOpt").textContent = pso.optimum.toFixed(1) + " $/h";
+  el("psoGap").textContent = (gap>=0?"+":"") + gap.toFixed(1) + " $/h (" + (100*gap/pso.optimum).toFixed(2) + "%)";
+  const be = el("psoBal"); be.textContent = (bal>=0?"+":"") + bal.toFixed(2) + " MW";
+  be.className = "v" + (Math.abs(bal) < 0.5 ? "" : " warn");
+}
+
+// animation loop — steps PSO at the chosen iterations/second
+let psoRunning = false, pacc = 0, plastT = performance.now();
+const psoRunBtn = document.getElementById("psoRun");
+function loop(now) {
+  const dt = now - plastT; plastT = now;
+  if (psoRunning && pso) {
+    const interval = 1000 / (+spRange.value);
+    pacc += dt; let steps = 0;
+    while (pacc >= interval && steps < 300) { psoStep(); pacc -= interval; steps++; }
+    if (steps > 0) { drawBars(); drawConv(); updatePsoReadout(); }
+  }
+  requestAnimationFrame(loop);
+}
+
+// PSO controls
+function bindLbl(r, id, f) { const u = () => document.getElementById(id).textContent = f(+r.value); r.addEventListener("input", u); u(); }
+bindLbl(npRange, "npVal", v => v);
+bindLbl(wRange, "wVal", v => v.toFixed(2));
+bindLbl(c1Range, "c1Val", v => v.toFixed(2));
+bindLbl(c2Range, "c2Val", v => v.toFixed(2));
+bindLbl(spRange, "spVal", v => v);
+
+psoRunBtn.addEventListener("click", () => {
+  if (!pso) psoInit();
+  psoRunning = !psoRunning;
+  psoRunBtn.textContent = psoRunning ? "⏸ Pause PSO" : "▶ Run PSO";
+  psoRunBtn.classList.toggle("primary", !psoRunning);
+  if (!psoRunning) { drawBars(); drawConv(); updatePsoReadout(); }
+});
+document.getElementById("psoReset").addEventListener("click", () => {
+  psoInit(); psoRunning = false;
+  psoRunBtn.textContent = "▶ Run PSO"; psoRunBtn.classList.add("primary");
+  drawBars(); drawConv(); updatePsoReadout();
+});
+npRange.addEventListener("change", () => { if (pso) { psoInit(); drawBars(); drawConv(); updatePsoReadout(); } });
+
 // go
 refresh();
+drawConv(); updatePsoReadout();
+requestAnimationFrame(loop);
 </script>
 </body>
 </html>

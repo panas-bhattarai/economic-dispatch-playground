@@ -721,7 +721,7 @@ function loop(now) {
     const interval = 1000 / (+spRange.value);
     pacc += dt; let steps = 0;
     while (pacc >= interval && steps < 300) { psoStep(); pacc -= interval; steps++; }
-    if (steps > 0) { drawBars(); drawConv(); updatePsoReadout(); }
+    if (steps > 0) { drawTop(); drawBars(); drawConv(); updatePsoReadout(); }
   }
   requestAnimationFrame(loop);
 }
@@ -739,12 +739,12 @@ psoRunBtn.addEventListener("click", () => {
   psoRunning = !psoRunning;
   psoRunBtn.textContent = psoRunning ? "⏸ Pause PSO" : "▶ Run PSO";
   psoRunBtn.classList.toggle("primary", !psoRunning);
-  if (!psoRunning) { drawBars(); drawConv(); updatePsoReadout(); }
+  drawTop(); drawBars(); drawConv(); updatePsoReadout();   // draw immediately so the swarm shows at once
 });
 document.getElementById("psoReset").addEventListener("click", () => {
   psoInit(); psoRunning = false;
   psoRunBtn.textContent = "▶ Run PSO"; psoRunBtn.classList.add("primary");
-  drawBars(); drawConv(); updatePsoReadout();
+  drawTop(); drawBars(); drawConv(); updatePsoReadout();
 });
 npRange.addEventListener("change", () => { if (pso) { psoInit(); drawBars(); drawConv(); updatePsoReadout(); } });
 

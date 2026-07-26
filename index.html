@@ -64,7 +64,7 @@
     <div class="cap" id="capTop">Incremental cost <b>dC/dP = 2aP + b</b> vs output — drag the white λ line; each unit loads to where its line meets λ (clamped to its limits)</div>
     <div class="card"><canvas id="ic" width="620" height="380"></canvas></div>
 
-    <div class="cap">Dispatch — colored bars = exact optimum; <b>white marks = PSO's best guess</b> (when running). Total generation vs demand below.</div>
+    <div class="cap">Dispatch — colored bar &amp; <b>coloured λ value</b> = λ‑iteration; <b>white mark &amp; white PSO value</b> = the swarm's best (when running). Total generation vs demand below.</div>
     <div class="card"><canvas id="bars" width="620" height="250"></canvas></div>
 
     <div class="cap">PSO convergence — swarm's best total cost vs iteration (log scale); the green dashed line is the exact λ‑iteration optimum</div>
@@ -404,9 +404,16 @@ function drawBars() {
     // name
     bctx.fillStyle = "#e6edf3"; bctx.font = "12px monospace"; bctx.textBaseline = "middle";
     bctx.fillText(g.name, 12, y+rowH/2);
-    // value
-    bctx.fillStyle = "#e6edf3";
-    bctx.fillText(d.P[i].toFixed(1)+" MW", X(g.pmax)+8, y+rowH/2);
+    // values, right of the bar: λ-iteration in the bar's own colour, and — when the
+    // swarm is running — PSO in white stacked below it, so the two are never confused.
+    const vx = X(g.pmax) + 8;
+    bctx.font = "11px monospace";
+    if (pso) {
+      bctx.fillStyle = g.color;    bctx.fillText("λ  " + d.P[i].toFixed(1), vx, y + 7);
+      bctx.fillStyle = "#ffffff";  bctx.fillText("PSO " + pso.gP[i].toFixed(1), vx, y + rowH - 7);
+    } else {
+      bctx.fillStyle = g.color;    bctx.fillText(d.P[i].toFixed(1) + " MW", vx, y + rowH/2);
+    }
   });
 
   // total generation vs demand row
@@ -426,7 +433,14 @@ function drawBars() {
   bctx.fillText("Pd", dx-6, ty+2);
   bctx.fillStyle = "#e6edf3"; bctx.font = "12px monospace"; bctx.textBaseline = "middle";
   bctx.fillText("Σ", 12, ty+6+rowH/2);
-  bctx.fillText(d.total.toFixed(1)+" MW", w-padR+8, ty+6+rowH/2);
+  const tvx = w-padR+8; bctx.font = "11px monospace";
+  if (pso) {
+    const psoTot = pso.gP.reduce((s,v) => s+v, 0);
+    bctx.fillStyle = met ? "#3fb950" : "#f0b429"; bctx.fillText("λ  " + d.total.toFixed(1), tvx, ty+6+7);
+    bctx.fillStyle = "#ffffff";                   bctx.fillText("PSO " + psoTot.toFixed(1), tvx, ty+6+rowH-7);
+  } else {
+    bctx.fillStyle = "#e6edf3"; bctx.fillText(d.total.toFixed(1)+" MW", tvx, ty+6+rowH/2);
+  }
 
   // PSO gbest overlay — white marks racing onto the colored optimum bars
   if (pso) {

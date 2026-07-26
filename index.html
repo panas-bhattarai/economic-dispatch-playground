@@ -61,7 +61,7 @@
 <div class="app">
 
   <div class="stage">
-    <div class="cap">Incremental cost <b>dC/dP = 2aP + b</b> vs output — drag the white λ line; each unit loads to where its line meets λ (clamped to its limits)</div>
+    <div class="cap" id="capTop">Incremental cost <b>dC/dP = 2aP + b</b> vs output — drag the white λ line; each unit loads to where its line meets λ (clamped to its limits)</div>
     <div class="card"><canvas id="ic" width="620" height="380"></canvas></div>
 
     <div class="cap">Dispatch — colored bars = exact optimum; <b>white marks = PSO's best guess</b> (when running). Total generation vs demand below.</div>
@@ -87,6 +87,21 @@
   <div class="panel">
     <h1>Economic Dispatch Playground</h1>
     <p class="sub">Minimize total fuel cost to meet demand — solved by the equal‑incremental‑cost (λ) criterion.</p>
+
+    <div class="group">
+      <h2>Cost model</h2>
+      <div class="btns">
+        <button class="primary" id="modeSmooth">Smooth (convex)</button>
+        <button id="modeValve">Valve‑point (non‑convex)</button>
+      </div>
+      <div id="valveControls" style="opacity:0.4; pointer-events:none;">
+        <label class="row">
+          <div class="lab"><span>Valve ripple scale (× benchmark e)</span><span class="val" id="vsVal">1.0</span></div>
+          <input type="range" id="vsRange" min="0" max="2" step="0.05" value="1" />
+        </label>
+      </div>
+      <div class="hint"><b>Smooth</b> = your 5‑unit system: λ‑iteration is exact and PSO just matches it. <b>Valve‑point</b> loads the classic Walters &amp; Sheble 3‑unit benchmark and adds a non‑convex ripple <b>|e·sin(f(Pmin−P))|</b> to each cost curve — now λ‑iteration is suboptimal and PSO finds a cheaper dispatch. Crank the ripple scale to exaggerate the effect.</div>
+    </div>
 
     <div class="group">
       <h2>Demand &amp; solve</h2>
@@ -146,8 +161,8 @@
       <div class="readout" style="margin-top:6px;">
         <div><span class="k">Iteration</span><span class="v" id="psoIter">—</span></div>
         <div><span class="k">PSO best cost (fuel)</span><span class="v" id="psoCost">—</span></div>
-        <div><span class="k">Exact optimum</span><span class="v" id="psoOpt">—</span></div>
-        <div><span class="k">Optimality gap</span><span class="v" id="psoGap">—</span></div>
+        <div><span class="k" id="psoOptLbl">Exact optimum</span><span class="v" id="psoOpt">—</span></div>
+        <div><span class="k" id="psoGapLbl">Optimality gap</span><span class="v" id="psoGap">—</span></div>
         <div><span class="k">PSO power balance</span><span class="v" id="psoBal">—</span></div>
       </div>
       <div class="hint">Each particle is a full dispatch vector (one output per unit). Watch the white marks on the bars slide onto the colored optimum, and the blue curve fall onto the green optimum line.</div>
@@ -156,7 +171,7 @@
     <div class="group">
       <h2>Reset</h2>
       <div class="btns">
-        <button id="resetBtn">Reset to default 5‑unit case (Pd = 850)</button>
+        <button id="resetBtn">Reset generators &amp; demand to defaults</button>
       </div>
       <div class="hint">Default data matches the MATLAB repo <b>Economic-Dispatch-Using-Particle-Swarm-Optimization</b>. Coming next: valve‑point loading (a non‑convex cost ripple, where λ‑iteration breaks and PSO earns its keep).</div>
     </div>
@@ -171,17 +186,41 @@
 //  Cost curve C_i(P) = a_i P^2 + b_i P + c_i ;  incremental cost = 2 a_i P + b_i
 // ------------------------------------------------------------------
 const COLORS = ["#58a6ff", "#3fb950", "#f0b429", "#ff7b72", "#bc8cff", "#56d4dd", "#e685b5"];
-const DEFAULT = [
-  { a:0.002, b:10, c:100, pmin:0, pmax:300 },
-  { a:0.003, b:8,  c:120, pmin:0, pmax:250 },
-  { a:0.004, b:6,  c:150, pmin:0, pmax:200 },
-  { a:0.005, b:5,  c:180, pmin:0, pmax:150 },
-  { a:0.006, b:4,  c:200, pmin:0, pmax:100 },
+// Smooth (convex) system — the 5-unit, Pd=850 case from the MATLAB PSO repo. e=0 (no ripple).
+const SMOOTH_DATA = [
+  { a:0.002, b:10, c:100, pmin:0, pmax:300, e:0, f:0 },
+  { a:0.003, b:8,  c:120, pmin:0, pmax:250, e:0, f:0 },
+  { a:0.004, b:6,  c:150, pmin:0, pmax:200, e:0, f:0 },
+  { a:0.005, b:5,  c:180, pmin:0, pmax:150, e:0, f:0 },
+  { a:0.006, b:4,  c:200, pmin:0, pmax:100, e:0, f:0 },
 ];
-let gens = DEFAULT.map((g,i) => ({ ...g, name:"G"+(i+1), color:COLORS[i%COLORS.length] }));
-let Pd = 850;
+// Valve-point (non-convex) system — the classic Walters & Sheble (1993) 3-unit
+// benchmark, Pd=850. The nearly-equal b coefficients keep all three units interior,
+// so the |e·sin(f(Pmin−P))| ripples create many local optima and λ-iteration (which
+// only sees the smooth quadratic part) is no longer optimal.
+const VALVE_DATA = [
+  { a:0.001562, b:7.92, c:561, pmin:100, pmax:600, e:300, f:0.0315 },
+  { a:0.001940, b:7.85, c:310, pmin:100, pmax:400, e:200, f:0.042  },
+  { a:0.004820, b:7.97, c:78,  pmin:50,  pmax:200, e:150, f:0.063  },
+];
+const buildSys = data => data.map((g,i) => ({ ...g, name:"G"+(i+1), color:COLORS[i%COLORS.length] }));
+let systems = { smooth: buildSys(SMOOTH_DATA), valve: buildSys(VALVE_DATA) };
+let PdBy = { smooth: 850, valve: 850 };
+let costModel = "smooth";   // "smooth" = 5-unit convex system; "valve" = 3-unit benchmark
+let valveScale = 1;         // multiplies each unit's valve amplitude e (0 = smooth-equivalent)
+let gens = systems.smooth;
+let Pd = PdBy.smooth;
 let lambda = 8;
 let mode = "auto";          // "auto" = optimal λ for current demand; "manual" = user-set λ
+
+// True fuel cost of one unit at output P — quadratic, plus the valve-point ripple
+// |e·sin(f(Pmin−P))| (e = 0 for the smooth system, so no ripple there). λ-iteration
+// sees only the quadratic part, so it is exact for smooth but suboptimal for valve.
+function unitCost(g, P) {
+  let c = g.a*P*P + g.b*P + g.c;
+  if (g.e) c += Math.abs(valveScale * g.e * Math.sin(g.f * (g.pmin - P)));
+  return c;
+}
 
 // ------------------------------------------------------------------
 //  Dispatch physics
@@ -193,7 +232,7 @@ const powerAt = (g, lam) =>                                   // this unit's out
 function dispatchAt(lam) {
   const P = gens.map(g => powerAt(g, lam));
   const total = P.reduce((s,v) => s+v, 0);
-  const cost = gens.reduce((s,g,i) => s + g.a*P[i]*P[i] + g.b*P[i] + g.c, 0);
+  const cost = gens.reduce((s,g,i) => s + unitCost(g, P[i]), 0);   // true cost (incl. valve ripple)
   return { P, total, cost };
 }
 
@@ -283,6 +322,66 @@ function drawIC() {
   ictx.fillText("λ = " + lambda.toFixed(2) + " $/MWh", padL+4, ly-4);
 }
 
+// Valve-point mode: draw the true cost curves C(P) (with ripples), and mark the
+// λ-iteration baseline dispatch (rings) vs the PSO dispatch (white dots).
+function drawCost() {
+  const w = ic.width, h = ic.height;
+  ictx.clearRect(0,0,w,h); ictx.fillStyle = "#0b0f14"; ictx.fillRect(0,0,w,h);
+  ic._map = null;   // no draggable λ line in this view
+  const padL = 58, padR = 64, padT = 16, padB = 34, plotW = w-padL-padR, plotH = h-padT-padB;
+  const xmax = Math.max(...gens.map(g => g.pmax));
+  let cmax = 0;
+  gens.forEach(g => { for (let s=0;s<=120;s++){ const P=g.pmin+(g.pmax-g.pmin)*s/120; cmax=Math.max(cmax,unitCost(g,P)); } });
+  cmax *= 1.05;
+  const X = p => padL + (p/xmax)*plotW;
+  const Y = c => padT + (1 - c/cmax)*plotH;
+
+  ictx.font = "10px monospace"; ictx.textBaseline = "middle";
+  const yStep = cmax > 3000 ? 1000 : (cmax > 1200 ? 500 : 200);
+  for (let c = 0; c <= cmax; c += yStep) {
+    const yy = Y(c);
+    ictx.strokeStyle = "#1c2330"; ictx.beginPath(); ictx.moveTo(padL, yy); ictx.lineTo(w-padR, yy); ictx.stroke();
+    ictx.fillStyle = "#6b7686"; ictx.fillText("$" + c, 6, yy);
+  }
+  ictx.textBaseline = "alphabetic";
+  for (let p = 0; p <= xmax; p += (xmax>600?200:100)) {
+    const xx = X(p); ictx.strokeStyle = "#161c26"; ictx.beginPath(); ictx.moveTo(xx, padT); ictx.lineTo(xx, h-padB); ictx.stroke();
+    ictx.fillStyle = "#6b7686"; ictx.fillText(p.toFixed(0), xx-8, h-padB+16);
+  }
+  ictx.fillStyle = "#6b7686"; ictx.fillText("output P (MW)", w-padR-60, h-padB+16);
+  ictx.save(); ictx.translate(14, padT+plotH/2); ictx.rotate(-Math.PI/2);
+  ictx.fillText("unit cost C ($/h)", -60, 0); ictx.restore();
+
+  const base = dispatchAt(solveExact(Pd));   // λ-iteration baseline dispatch
+  gens.forEach((g,i) => {
+    ictx.strokeStyle = g.color; ictx.lineWidth = 1.8; ictx.beginPath();
+    for (let s = 0; s <= 240; s++) {
+      const P = g.pmin + (g.pmax-g.pmin)*s/240, xx = X(P), yy = Y(unitCost(g, P));
+      if (s === 0) ictx.moveTo(xx, yy); else ictx.lineTo(xx, yy);
+    }
+    ictx.stroke();
+    ictx.fillStyle = g.color; ictx.font = "11px monospace"; ictx.textBaseline = "middle";
+    ictx.fillText(g.name, X(g.pmax)+4, Y(unitCost(g, g.pmax)));
+    // λ-iteration baseline (hollow ring)
+    const Pb = base.P[i];
+    ictx.strokeStyle = "#c9d1d9"; ictx.lineWidth = 1.5;
+    ictx.beginPath(); ictx.arc(X(Pb), Y(unitCost(g, Pb)), 5, 0, 2*Math.PI); ictx.stroke();
+    // PSO dispatch (filled white)
+    if (pso) { const Pp = pso.gP[i]; ictx.fillStyle = "#ffffff";
+      ictx.beginPath(); ictx.arc(X(Pp), Y(unitCost(g, Pp)), 3.5, 0, 2*Math.PI); ictx.fill(); }
+  });
+
+  // legend
+  ictx.textBaseline = "top"; ictx.font = "11px monospace";
+  ictx.strokeStyle = "#c9d1d9"; ictx.lineWidth = 1.5;
+  ictx.beginPath(); ictx.arc(padL+8, padT+6, 5, 0, 2*Math.PI); ictx.stroke();
+  ictx.fillStyle = "#8b949e"; ictx.fillText("λ‑iter baseline", padL+18, padT);
+  if (pso) { ictx.fillStyle = "#ffffff"; ictx.beginPath(); ictx.arc(padL+140, padT+6, 3.5, 0, 2*Math.PI); ictx.fill();
+    ictx.fillStyle = "#8b949e"; ictx.fillText("PSO", padL+150, padT); }
+}
+
+function drawTop() { if (costModel === "valve") drawCost(); else drawIC(); }
+
 // ------------------------------------------------------------------
 //  Rendering — dispatch bars
 // ------------------------------------------------------------------
@@ -359,7 +458,7 @@ function renderTable() {
       cell("a", g.a, 0.001) + cell("b", g.b, 0.5) + cell("c", g.c, 10) +
       cell("pmin", g.pmin, 10) + cell("pmax", g.pmax, 10) +
       `<td class="pcell">${d.P[i].toFixed(1)}</td>` +
-      `<td>${(g.a*d.P[i]*d.P[i]+g.b*d.P[i]+g.c).toFixed(0)}</td>`;
+      `<td>${unitCost(g, d.P[i]).toFixed(0)}</td>`;
     genBody.appendChild(tr);
   });
   document.getElementById("ftP").textContent = d.total.toFixed(1);
@@ -412,7 +511,7 @@ function refresh() {
   if (mode === "auto") lambda = solveExact(Pd);
   syncLamSlider();
   if (pso) psoInit();          // the problem changed — restart the swarm against it
-  drawIC(); drawBars(); renderTable(); updateReadout();
+  drawTop(); drawBars(); renderTable(); updateReadout();
   if (pso) { drawConv(); updatePsoReadout(); }
 }
 
@@ -428,16 +527,19 @@ pdRange.addEventListener("input", () => {
 lamRange.addEventListener("input", () => {
   lambda = +lamRange.value; mode = "manual";
   document.getElementById("lamVal").textContent = lambda.toFixed(2);
-  drawIC(); drawBars(); renderTable(); updateReadout();
+  drawTop(); drawBars(); renderTable(); updateReadout();
 });
 document.getElementById("solveBtn").addEventListener("click", () => {
   mode = "auto"; refresh();
 });
 document.getElementById("resetBtn").addEventListener("click", () => {
-  gens = DEFAULT.map((g,i) => ({ ...g, name:"G"+(i+1), color:COLORS[i%COLORS.length] }));
-  Pd = 850; mode = "auto";
-  pdRange.value = 850; document.getElementById("pdVal").textContent = 850;
-  refresh();
+  systems = { smooth: buildSys(SMOOTH_DATA), valve: buildSys(VALVE_DATA) };
+  PdBy = { smooth: 850, valve: 850 };
+  gens = systems[costModel]; Pd = PdBy[costModel]; mode = "auto";
+  pdRange.max = gens.reduce((s,g) => s+g.pmax, 0);
+  pdRange.value = Pd; document.getElementById("pdVal").textContent = Pd;
+  pso = null; psoRunning = false; psoRunBtn.textContent = "▶ Run PSO"; psoRunBtn.classList.add("primary");
+  refresh(); drawConv(); updatePsoReadout();
 });
 
 // drag the λ line on the incremental-cost canvas
@@ -449,10 +551,10 @@ function lamFromEvent(e) {
   let l = m.yLo + (1 - (py - m.padT)/m.plotH) * (m.yHi - m.yLo);
   return Math.max(m.yLo, Math.min(m.yHi, l));
 }
-ic.addEventListener("mousedown", e => { dragging = true; mode = "manual"; lambda = lamFromEvent(e);
-  drawIC(); drawBars(); renderTable(); updateReadout(); syncLamSlider(); });
-window.addEventListener("mousemove", e => { if (!dragging) return; lambda = lamFromEvent(e);
-  drawIC(); drawBars(); renderTable(); updateReadout(); syncLamSlider(); });
+ic.addEventListener("mousedown", e => { if (costModel === "valve") return; dragging = true; mode = "manual"; lambda = lamFromEvent(e);
+  drawTop(); drawBars(); renderTable(); updateReadout(); syncLamSlider(); });
+window.addEventListener("mousemove", e => { if (!dragging || costModel === "valve") return; lambda = lamFromEvent(e);
+  drawTop(); drawBars(); renderTable(); updateReadout(); syncLamSlider(); });
 window.addEventListener("mouseup", () => { dragging = false; });
 ic.style.cursor = "ns-resize";
 
@@ -468,7 +570,7 @@ const npRange = document.getElementById("npRange"), wRange = document.getElement
 const MU = 120;   // fixed penalty weight on the power-balance equality (kept constant so the
                   //   objective is consistent across iterations — the swarm's gbest never worsens)
 
-function fuelCost(P) { return gens.reduce((s,g,i) => s + g.a*P[i]*P[i] + g.b*P[i] + g.c, 0); }
+function fuelCost(P) { return gens.reduce((s,g,i) => s + unitCost(gens[i], P[i]), 0); }
 function penObjective(P) {
   let total = 0; for (const v of P) total += v;
   return fuelCost(P) + MU*(total - Pd)*(total - Pd);
@@ -479,8 +581,14 @@ let pso = null;
 function psoInit() {
   const np = +npRange.value, parts = [];
   let gP = null, gCost = Infinity;
+  const baseP = dispatchAt(solveExact(Pd)).P;   // λ-iteration dispatch
   for (let k = 0; k < np; k++) {
-    const P = gens.map(g => g.pmin + Math.random()*(g.pmax - g.pmin));
+    // Valve-point mode: warm-start one particle at the λ-iteration solution, so the
+    // swarm begins from the classical answer and can only improve on it by exploiting
+    // the ripples. Smooth mode stays fully random so its convergence stays visible.
+    const P = (k === 0 && costModel === "valve")
+      ? baseP.slice()
+      : gens.map(g => g.pmin + Math.random()*(g.pmax - g.pmin));
     const V = gens.map(g => (Math.random()-0.5)*(g.pmax - g.pmin)*0.1);
     const oc = penObjective(P);
     parts.push({ P, V, pP:P.slice(), pCost:oc });
@@ -515,7 +623,10 @@ function drawConv() {
     cctx.fillText("Run PSO to see the swarm converge to the optimum…", padL, h/2); return; }
   const opt = pso.optimum, hist = pso.history, n = hist.length;
   const lg = v => Math.log10(Math.max(v, 1));
-  let yLo = lg(opt) - 0.15, yHi = lg(Math.max(...hist)) + 0.1;
+  // include the optimum AND the PSO minimum in range, so a PSO curve that dips
+  // below the baseline (valve-point mode) stays on-chart.
+  let yLo = Math.min(lg(opt), lg(Math.min(...hist))) - 0.12;
+  let yHi = lg(Math.max(...hist)) + 0.1;
   if (yHi <= yLo) yHi = yLo + 1;
   const X = i => padL + (n <= 1 ? 0 : (i/(n-1))*plotW);
   const Y = l => padT + (1 - (l-yLo)/(yHi-yLo))*plotH;
@@ -530,7 +641,8 @@ function drawConv() {
   const oy = Y(lg(opt));
   cctx.strokeStyle = "#3fb950"; cctx.lineWidth = 1.5; cctx.setLineDash([5,4]);
   cctx.beginPath(); cctx.moveTo(padL, oy); cctx.lineTo(w-padR, oy); cctx.stroke(); cctx.setLineDash([]);
-  cctx.fillStyle = "#3fb950"; cctx.textBaseline = "bottom"; cctx.fillText("optimum $" + opt.toFixed(0), padL+4, oy-3);
+  cctx.fillStyle = "#3fb950"; cctx.textBaseline = "bottom";
+  cctx.fillText(costModel === "valve" ? ("λ‑iter baseline $" + opt.toFixed(0) + " — PSO dips below") : ("optimum $" + opt.toFixed(0)), padL+4, oy-3);
   // convergence curve (stride so long runs stay fast)
   const stride = Math.max(1, Math.floor(n/plotW));
   cctx.strokeStyle = "#58a6ff"; cctx.lineWidth = 2; cctx.beginPath();
@@ -588,6 +700,36 @@ document.getElementById("psoReset").addEventListener("click", () => {
   drawBars(); drawConv(); updatePsoReadout();
 });
 npRange.addEventListener("change", () => { if (pso) { psoInit(); drawBars(); drawConv(); updatePsoReadout(); } });
+
+// Cost-model selector — swaps between the smooth 5-unit system and the 3-unit valve benchmark
+const vsRange = document.getElementById("vsRange");
+const capTop = document.getElementById("capTop");
+const CAP_SMOOTH = 'Incremental cost <b>dC/dP = 2aP + b</b> vs output — drag the white λ line; each unit loads to where its line meets λ (clamped to its limits)';
+const CAP_VALVE = 'Cost curves <b>C(P)</b> with valve‑point ripples (non‑convex) — hollow rings = λ‑iteration baseline dispatch, white dots = PSO\'s cheaper dispatch';
+function setCostModel(m) {
+  if (m === costModel) return;
+  PdBy[costModel] = Pd;                 // remember demand for the outgoing system
+  costModel = m; gens = systems[m]; Pd = PdBy[m]; mode = "auto";
+  document.getElementById("modeSmooth").classList.toggle("primary", m === "smooth");
+  document.getElementById("modeValve").classList.toggle("primary", m === "valve");
+  const vc = document.getElementById("valveControls");
+  vc.style.opacity = m === "valve" ? "1" : "0.4";
+  vc.style.pointerEvents = m === "valve" ? "auto" : "none";
+  document.getElementById("psoOptLbl").textContent = m === "valve" ? "λ‑iter baseline" : "Exact optimum";
+  document.getElementById("psoGapLbl").textContent = m === "valve" ? "PSO vs baseline" : "Optimality gap";
+  capTop.innerHTML = m === "valve" ? CAP_VALVE : CAP_SMOOTH;
+  ic.style.cursor = m === "valve" ? "default" : "ns-resize";
+  pdRange.max = gens.reduce((s,g) => s+g.pmax, 0);      // demand range follows capacity
+  pdRange.value = Pd; document.getElementById("pdVal").textContent = Pd;
+  pso = null; psoRunning = false; psoRunBtn.textContent = "▶ Run PSO"; psoRunBtn.classList.add("primary");
+  refresh(); drawConv(); updatePsoReadout();
+}
+document.getElementById("modeSmooth").addEventListener("click", () => setCostModel("smooth"));
+document.getElementById("modeValve").addEventListener("click", () => setCostModel("valve"));
+vsRange.addEventListener("input", () => {
+  valveScale = +vsRange.value; document.getElementById("vsVal").textContent = valveScale.toFixed(2);
+  if (costModel === "valve") { if (pso) psoInit(); refresh(); if (pso) { drawConv(); updatePsoReadout(); } }
+});
 
 // go
 refresh();

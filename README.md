@@ -48,10 +48,17 @@ Here G2–G5 are maxed out and **G1 is the marginal unit** on the λ line. Drag 
 
 ---
 
-## Roadmap
+## Two cost models — convex vs. non-convex
 
-- **v1** — a PSO solver racing this exact answer: a swarm of candidate dispatches, a live log-scale convergence plot, and the swarm's dispatch overlaid against the λ-iteration optimum.
-- **v2** — **valve-point loading** (a rectified-sine ripple on each cost curve), which makes the problem non-convex and non-differentiable — the regime where λ-iteration breaks and metaheuristics like PSO earn their keep.
+A **Cost model** switch chooses what you're solving:
+
+- **Smooth (convex)** — the 5-unit system above. λ-iteration is exact, and the PSO solver just converges to the same answer. Watch a swarm of candidate dispatch vectors fall onto the optimum on a live log-scale convergence plot, with the swarm's best guess overlaid on the dispatch bars.
+
+- **Valve-point (non-convex)** — loads the classic **Walters & Sheble (1993) 3-unit benchmark**, adding a rectified-sine ripple $|e_i\sin(f_i(P_i^{\min}-P_i))|$ to each cost curve. Because the units have nearly-equal incremental costs they all stay *interior* (free to move), so the ripples create many local optima. Now **λ-iteration is suboptimal** — it only sees the smooth trend — and **PSO finds a genuinely cheaper dispatch**, dipping below the λ-iteration baseline on the convergence plot. A ripple-scale slider exaggerates the effect.
+
+  For this benchmark ($P_d = 850$ MW): the λ-iteration dispatch costs ≈ **8482 $/h**, the true optimum is ≈ **8234 $/h**, and PSO lands in between — beating the classical method by exploiting the ripples, exactly the regime where metaheuristics earn their keep.
+
+Both use the same PSO core: each particle is a full dispatch vector, updated by the standard velocity rule, with the power balance handled by a penalty (valve mode warm-starts one particle at the λ-iteration solution so the swarm can only improve on it).
 
 ## Running / hosting it yourself
 

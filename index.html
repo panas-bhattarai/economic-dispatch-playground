@@ -485,6 +485,7 @@ function renderTable() {
       if (k === "a") v = Math.max(0, v);
       gens[i][k] = v;
       if (gens[i].pmin > gens[i].pmax) gens[i].pmin = gens[i].pmax;
+      if (pso) psoInit();        // a generator changed — restart the swarm on the new problem
       refresh();
     });
   });
@@ -521,10 +522,12 @@ function syncLamSlider() {
   lamRange.value = lambda;
   document.getElementById("lamVal").textContent = lambda.toFixed(2);
 }
+// Recompute λ and redraw everything. Does NOT restart the swarm — only the handlers
+// that actually change the problem (demand, generators, ripple scale) do that, so
+// Auto-solve just updates the λ side and leaves a running PSO untouched.
 function refresh() {
   if (mode === "auto") lambda = solveExact(Pd);
   syncLamSlider();
-  if (pso) psoInit();          // the problem changed — restart the swarm against it
   drawTop(); drawBars(); renderTable(); updateReadout();
   if (pso) { drawConv(); updatePsoReadout(); }
 }
@@ -536,6 +539,7 @@ const pdRange = document.getElementById("pdRange");
 pdRange.addEventListener("input", () => {
   Pd = +pdRange.value;
   document.getElementById("pdVal").textContent = Pd;
+  if (pso) psoInit();          // demand changed — restart the swarm on the new problem
   refresh();
 });
 lamRange.addEventListener("input", () => {
